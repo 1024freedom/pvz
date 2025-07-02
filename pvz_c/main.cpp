@@ -1,6 +1,9 @@
 #include<stdio.h>
 #include<graphics.h>//easyx图形库
 #include<time.h>
+#include<math.h>
+#include<mmsystem.h>
+#pragma comment(lib,"winmm.lib")
 #include"tools.h"
 #define WIN_WIDTH 900
 #define WIN_HEIGHT 600
@@ -21,10 +24,22 @@ struct sunshineBall {
 	int frameIndex;//当前显示的图片帧序号
 	int destY;//阳光飘落的目标位置的y坐标
 	bool used;//是否在显示
+	int timer;//计时器（阳光存在多久）
+	float xoff;
+	float yoff;//点击阳光球后往bar飞跃时的偏移量
 };
-struct sunshineBall balls[10];//池
+struct sunshineBall balls[10];//阳光池
 IMAGE imgSunshineBall[29];//阳光帧
+int sunshine;
 
+struct zm {
+	int x, y;
+	int frameIndex;
+	bool used;
+	int speed;
+};
+struct zm zms[10];//僵尸池
+IMAGE imgZM[22];
 
 enum{//枚举进行植物计数
 	SunFlower,
@@ -77,10 +92,28 @@ void gameInit() {
 		loadimage(&imgSunshineBall[i], name);
 	}
 	srand(time(NULL));//配置随机种子
+	sunshine = 75;//初始化阳光值
 
 	//创建游戏的图形窗口
 	initgraph(WIN_WIDTH, WIN_HEIGHT);
 
+	//设置字体
+	LOGFONT f;
+	gettextstyle(&f);
+	f.lfHeight = 30;
+	f.lfWeight = 15;
+	strcpy(f.lfFaceName, "Segoe UI Black");
+	f.lfQuality = ANTIALIASED_QUALITY;//抗锯齿效果
+	settextstyle(&f);
+	setbkmode(TRANSPARENT);
+	setcolor(BLACK);
+
+	//初始化僵尸数据
+	memset(zms, 0, sizeof(zms));
+	for (int i = 0;i < 22;i++) {
+		sprintf_s(name, sizeof(name), "res/zm/%d.png", i + 1);
+		loadimage(&imgZM[i], name);
+	}
 }
 
 void updateWindow() {
@@ -116,9 +149,56 @@ void updateWindow() {
 		//使拖动时光标居中
 	}
 
+	//渲染阳光球
+	int ballMax = sizeof(balls) / sizeof(balls[0]);
+	for (int i = 0;i < ballMax;i++) {
+		if (balls[i].used||balls[i].xoff) {
+			IMAGE* img = &imgSunshineBall[balls[i].frameIndex];
+			putimagePNG(balls[i].x, balls[i].y, img);
+
+		}
+	}
+	//渲染阳光球被选择后的飞跃
+	
+	//渲染阳光值
+	char scoreText[8];
+	sprintf_s(scoreText, sizeof(scoreText), "%d", sunshine);
+	outtextxy(285, 67, scoreText);//输出阳光值
+
+	//渲染僵尸
+	int zmcnt = sizeof(zms) / sizeof(zms[0]);
+	for (int i = 0;i < zmcnt;i++) {
+		if (zms[i].used) {
+			IMAGE* img = &imgZM[zms[i].frameIndex];
+			putimagePNG(zms[i].x, zms[i].y-img->getheight(), img);
+		}
+	}
 	EndBatchDraw();//结束双缓冲
 }
-
+void collectSunshine(ExMessage* msg) {
+	int cnt = sizeof(balls) / sizeof(sizeof(balls[0]));
+	int width = imgSunshineBall[0].getwidth();
+	int height = imgSunshineBall[0].getheight();
+	
+	for (int i = 0;i < cnt;i++) {
+		if (balls[i].used) {
+			int x = balls[i].x;
+			int y = balls[i].y;
+			if (msg->x > x && msg->x<x + width
+				&& msg->y>y && msg->y < y + height) {
+				balls[i].used = false;//收集阳光
+				mciSendString("play res/sunshine.mp3",0,0,0);
+				//设置飞移的偏移量
+				float destY = 0;
+				float destX = 262;
+				float angle = atan((y - destY) / (x - destX));
+				balls[i].xoff = 8 * cos(angle);
+				balls[i].yoff = 8 * sin(angle);
+			
+			}
+		}
+	}
+}
 void userClick() {
 	ExMessage msg;
 	static int status = 0;
@@ -128,6 +208,9 @@ void userClick() {
 				int index = (msg.x - 340) / 72;
 				status = 1;
 				curPlant = index + 1;
+			}
+			else {
+				collectSunshine(&msg);
 			}
 		}
 		else if (msg.message == WM_MOUSEMOVE && status) {//鼠标移动
@@ -150,10 +233,10 @@ void userClick() {
 }
 void createSunshine() {
 	static int cnt = 0;
-	static int fre = 400;
+	static int fre = 200;
 	cnt++;
 	if (cnt >= fre) {//控制阳光产生的随机性
-		fre = 200 + rand() % 200;
+		fre = 100 + rand() % 300;
 		cnt = 0;
 		//从阳光池中取一个可以使用的
 		int ballMax = sizeof(balls) / sizeof(balls[0]);
@@ -165,9 +248,77 @@ void createSunshine() {
 		balls[i].x = 260 + rand() % (900 - 260);
 		balls[i].y = 60;
 		balls[i].destY = 200 + (rand() % 4) * 90;
+		balls[i].timer = 0;
+		balls[i].xoff = 0;
+		balls[i].yoff = 0;
 	}
 }
-void updateGame() {
+void updateSunshine() {
+	int ballMax = sizeof(balls) / sizeof(balls[0]);
+	for (int i = 0;i < ballMax;i++) {
+		if (balls[i].used) {
+			balls[i].frameIndex=(balls[i].frameIndex+1)%29;//29帧
+			if (balls[i].timer == 0) {
+				balls[i].y += 2;
+			}//到达目标降落位置前
+			if (balls[i].y >= balls[i].destY) {
+				balls[i].timer++;
+				if (balls[i].timer > 300) {
+					balls[i].used = false;balls[i].used = false;
+				}//阳光消失
+
+			}//到达目标降落位置后启动计时器
+		}
+		else if (balls[i].xoff) {
+			float destY = 0;
+			float destX = 262;
+			float angle = atan((balls[i].y - destY) / (balls[i].x - destX));
+			balls[i].xoff = 8 * cos(angle);
+			balls[i].yoff = 8 * sin(angle);//每次都更新一下，减少误差
+			balls[i].x -= balls[i].xoff;
+			balls[i].y -= balls[i].yoff;
+			if (balls[i].y < 0 || balls[i].x < 262) {
+				balls[i].xoff = 0;
+				balls[i].yoff = 0;
+				sunshine += 25;
+			}
+		}
+	}
+}
+void createZM() {
+	static int cnt = 0;
+	static int zmFre = 300;
+	cnt++;
+	if (cnt > zmFre) {
+		cnt = 0;
+		zmFre = 300 + rand() % 150;
+		int i;
+		int zmMax = sizeof(zms) / sizeof(zms[0]);
+		for (i = 0;i < zmMax && zms[i].used;i++);
+		if (i < zmMax) {
+			zms[i].used = true;
+			zms[i].x = WIN_WIDTH;
+			zms[i].y = 172 + (1 + rand() % 3) * 100;
+			zms[i].speed = 1;
+		}
+	}
+}
+void updateZM() {
+	//更新位置
+	int zmMax = sizeof(zms) / sizeof(zms[0]);
+	for (int i = 0;i < zmMax;i++) {
+		if (zms[i].used) {
+			zms[i].frameIndex = (zms[i].frameIndex + 1) % 22;
+			zms[i].x -= zms[i].speed;
+			if (zms[i].x < 165) {
+				printf("game over");
+				MessageBox(NULL, "over", "over", 0);
+				exit(0);
+			}
+		}
+	}
+}
+void updateGame() {//更新游戏数据
 	for (int i = 0;i < 3;i++) {
 		for (int j = 0;j < 9;j++) {
 			if (map[i][j].type) {
@@ -180,7 +331,10 @@ void updateGame() {
 			}
 		}
 	}
-	createSunshine();
+	createSunshine();//创建阳光
+	updateSunshine();//更新阳光状态
+	createZM();//生成僵尸
+	updateZM();//更新僵尸状态
 }
 
 void startUI() {
