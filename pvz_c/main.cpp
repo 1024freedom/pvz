@@ -18,6 +18,13 @@ struct Plant {
 	int framIndex;//姿态帧序号
 };
 struct Plant map[3][9];
+enum {//枚举进行植物计数
+	PeaShooter,
+	SunFlower,
+	PLANT_COUNT
+};
+IMAGE imgCard[PLANT_COUNT];
+IMAGE* imgPlant[PLANT_COUNT][20];//植物种植后的姿态（指针数组）
 
 struct sunshineBall {
 	int x, y;//飘落过程中的坐标
@@ -37,17 +44,20 @@ struct zm {
 	int frameIndex;
 	bool used;
 	int speed;
+	int row;
 };
 struct zm zms[10];//僵尸池
 IMAGE imgZM[22];
 
-enum{//枚举进行植物计数
-	SunFlower,
-	PeaShooter,
-	PLANT_COUNT
+struct bullet {
+	int x, y;
+	int row;
+	bool used;
+	int speed;
 };
-IMAGE imgCard[PLANT_COUNT];
-IMAGE* imgPlant[PLANT_COUNT][20];//植物种植后的姿态（指针数组）
+struct bullet bullets[30];//子弹池
+IMAGE imgBulletNormal;//子弹正常状态
+IMAGE imgBulletBlast;//子弹爆炸状态
 
 bool fileExist(const char* name) {
 	FILE* fp = fopen(name, "r");
@@ -114,6 +124,11 @@ void gameInit() {
 		sprintf_s(name, sizeof(name), "res/zm/%d.png", i + 1);
 		loadimage(&imgZM[i], name);
 	}
+
+	//初始化子弹
+	loadimage(&imgBulletNormal, "res/bullets/bullet_normal.png");
+	loadimage(&imgBulletBlast, "res/bullets/bullet_blast.png");
+	memset(bullets, 0, sizeof(bullets));
 }
 
 void updateWindow() {
@@ -173,6 +188,15 @@ void updateWindow() {
 			putimagePNG(zms[i].x, zms[i].y-img->getheight(), img);
 		}
 	}
+
+	//渲染子弹
+	int bulletMax = sizeof(bullets) / sizeof(bullets[0]);
+	for (int i = 0;i < bulletMax;i++) {
+		if (bullets[i].used) {
+			putimagePNG(bullets[i].x, bullets[i].y, &imgBulletNormal);
+		}
+	}
+
 	EndBatchDraw();//结束双缓冲
 }
 void collectSunshine(ExMessage* msg) {
@@ -205,7 +229,7 @@ void userClick() {
 	if (peekmessage(&msg)) {
 		if (msg.message == WM_LBUTTONDOWN) {//鼠标按下
 			if (msg.x > 340 && msg.x < 340 + 72 * PLANT_COUNT && msg.y < 94) {
-				int index = (msg.x - 340) / 72;
+				int index = (msg.x - 340) / 72;//根据bar栏位置判断植物对应的序号
 				status = 1;
 				curPlant = index + 1;
 			}
@@ -298,7 +322,8 @@ void createZM() {
 		if (i < zmMax) {
 			zms[i].used = true;
 			zms[i].x = WIN_WIDTH;
-			zms[i].y = 172 + (1 + rand() % 3) * 100;
+			zms[i].row = rand() % 3;
+			zms[i].y = 172 + (1 + zms[i].row) * 100;
 			zms[i].speed = 1;
 		}
 	}
@@ -318,6 +343,50 @@ void updateZM() {
 		}
 	}
 }
+void shoot() {
+	int lines[3] = { 0 };
+	int zmCnt = sizeof(zms) / sizeof(zms[0]);
+	int bulletMax = sizeof(bullets) / sizeof(bullets[0]);
+	int dangerX = WIN_WIDTH - imgZM[0].getwidth();
+	for (int i = 0;i < zmCnt;i++) {
+		if (zms[i].used && zms[i].x < dangerX) {
+			lines[zms[i].row] = 1;
+		}
+	}//僵尸出现的行
+	for (int i = 0;i < 3;i++) {
+		for (int j = 0;j < 9;j++) {
+			if ((map[i][j].type == (PeaShooter+1)) && lines[i]) {
+				static int cnt = 0;
+				cnt++;
+				if (cnt > 10) {
+					cnt = 0;
+					int k;
+					for (k = 0;k < bulletMax && bullets[k].used;k++);
+					if (k < bulletMax) {
+						bullets[k].used = true;
+						bullets[k].row = i;
+						bullets[k].speed = 4;
+						int plantX = 256 + j * 81;
+						int plantY = 179 + i * 102;
+						bullets[k].x = plantX + imgPlant[map[i][j].type - 1][0]->getwidth() - 10;
+						bullets[k].y = plantY + 5;//子弹相对于植物的位置
+					}
+				}
+			}
+		}
+	}
+}
+void updatebullet() {
+	int cntMax = sizeof(bullets) / sizeof(bullets[0]);
+	for (int i = 0;i < cntMax;i++) {
+		if (bullets[i].used) {
+			bullets[i].x += bullets[i].speed;
+			if (bullets[i].x > WIN_WIDTH) {
+				bullets[i].used = false;
+			}
+		}
+	}
+}
 void updateGame() {//更新游戏数据
 	for (int i = 0;i < 3;i++) {
 		for (int j = 0;j < 9;j++) {
@@ -333,8 +402,12 @@ void updateGame() {//更新游戏数据
 	}
 	createSunshine();//创建阳光
 	updateSunshine();//更新阳光状态
+
 	createZM();//生成僵尸
 	updateZM();//更新僵尸状态
+
+	shoot();//发射子弹
+	updatebullet();//更新子弹位置
 }
 
 void startUI() {
