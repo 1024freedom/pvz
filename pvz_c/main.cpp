@@ -16,6 +16,8 @@ int curPlant = 0;//当前选择植物的序号（从1开始）
 struct Plant {
 	int type;//与curPlant保持一致
 	int framIndex;//姿态帧序号
+	int blood;//血量
+	bool catched;//是否被吃
 };
 struct Plant map[3][9];
 enum {//枚举进行植物计数
@@ -47,10 +49,13 @@ struct zm {
 	int row;
 	int blood;
 	bool dead;//僵尸是否死亡
+	bool eating;//是否正在吃植物
+
 };
 struct zm zms[10];//僵尸池
 IMAGE imgZM[22];
 IMAGE imgZMDead[20];
+IMAGE imgZMEat[21];//帧
 
 struct bullet {
 	int x, y;
@@ -82,6 +87,15 @@ void gameInit() {
 
 	memset(imgPlant, 0, sizeof(imgPlant));
 	memset(map, 0, sizeof(map));
+	size_t blood_offset = offsetof(Plant, blood);
+	size_t blood_size = sizeof(int);
+	for (int i = 0;i < 3;i++) {
+		for (int j = 0;j < 9;j++) {
+			void* blood_ptr = (char*)&map[i][j] + blood_offset;
+			int value = 120;
+			memcpy(blood_ptr, &value, blood_size);
+		}
+	}//代码整体结构还需优化（因缺少创建植物的函数）
 	memset(balls, 0, sizeof(balls));
 
 	char name[64];
@@ -132,6 +146,10 @@ void gameInit() {
 	for (int i = 0;i < 20;i++) {
 		sprintf_s(name, sizeof(name), "res/zm_dead/%d.png", i + 1);
 		loadimage(&imgZMDead[i], name);
+	}
+	for (int i = 0;i < 21;i++) {
+		sprintf_s(name, sizeof(name), "res/zm_eat/%d.png", i + 1);
+		loadimage(&imgZMEat[i], name);
 	}
 
 	//初始化子弹
@@ -204,6 +222,10 @@ void updateWindow() {
 		if (zms[i].used) {
 			if (zms[i].dead) {
 				IMAGE* img = &imgZMDead[zms[i].frameIndex];
+				putimagePNG(zms[i].x, zms[i].y - img->getheight(), img);
+			}
+			else if (zms[i].eating) {
+				IMAGE* img = &imgZMEat[zms[i].frameIndex];
 				putimagePNG(zms[i].x, zms[i].y - img->getheight(), img);
 			}
 			else {
@@ -342,11 +364,12 @@ void createZM() {
 	cnt++;
 	if (cnt > zmFre) {
 		cnt = 0;
-		zmFre = 300 + rand() % 150;
+		zmFre = 100 + rand() % 100;
 		int i;
 		int zmMax = sizeof(zms) / sizeof(zms[0]);
 		for (i = 0;i < zmMax && zms[i].used;i++);
 		if (i < zmMax) {
+			memset(&zms[i], 0, sizeof(zms[i]));
 			zms[i].used = true;
 			zms[i].x = WIN_WIDTH;
 			zms[i].row = rand() % 3;
@@ -368,7 +391,10 @@ void updateZM() {
 					zms[i].dead = false;
 				}
 			}
-			else {
+			else if (zms[i].eating) {
+				zms[i].frameIndex = (zms[i].frameIndex + 1) % 21;
+			}
+			else{
 				zms[i].frameIndex = (zms[i].frameIndex + 1) % 22;
 				zms[i].x -= zms[i].speed;
 				if (zms[i].x < 165) {
@@ -433,7 +459,7 @@ void updatebullet() {
 		}
 	}
 }
-void collisionCheck() {//碰撞检测
+void collisionCheck() {//碰撞检测(子弹与僵尸、僵尸与植物)
 	int bcnt = sizeof(bullets) / sizeof(bullets[0]);
 	int zcnt = sizeof(zms) / sizeof(zms[0]);
 	for (int i = 0;i < bcnt;i++) {
@@ -461,6 +487,50 @@ void collisionCheck() {//碰撞检测
 				}
 			}
 		}
+	}//子弹与僵尸
+	for (int i = 0;i < zcnt;i++) {
+		int row = zms[i].row;
+		if (zms[i].dead) {
+			continue;
+		}
+		for (int j = 0;j < 9;j++) {//按行检查
+			if (!map[row][j].type) {
+				continue;
+			}
+			else {
+				int plantX= 256 + j * 81;
+				int x1 = plantX + 10;
+				int x2 = plantX + 60;
+				int x3 = zms[i].x + 80;
+				if (x3 > x1 && x3 < x2) {
+					if (map[row][j].blood <= 0) {
+						zms[i].eating = false;
+						zms[i].speed = 1;
+					}
+					else if(!zms[i].eating) {
+						map[row][j].catched = true;
+						zms[i].eating = true;
+						zms[i].speed = 0;
+						zms[i].frameIndex = 0;
+					}
+				}
+			}
+		}
+	}
+}
+void updatePlant() {
+	for (int i = 0;i < 3;i++) {
+		for (int j = 0;j < 9;j++) {
+			if (map[i][j].type) {
+				if (map[i][j].blood <= 0) {
+					map[i][j].type = 0;
+					map[i][j].catched = false;
+				}
+				else if (map[i][j].catched) {
+					map[i][j].blood -= 1;
+				}
+			}
+		}
 	}
 }
 void updateGame() {//更新游戏数据
@@ -485,7 +555,8 @@ void updateGame() {//更新游戏数据
 	shoot();//发射子弹
 	updatebullet();//更新子弹位置
 
-	collisionCheck();//子弹与僵尸的碰撞检测
+	collisionCheck();//碰撞检测
+	updatePlant();//更新植物健康状态
 }
 
 void startUI() {
